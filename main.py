@@ -32,7 +32,7 @@ from database import DB
 
 load_dotenv(find_dotenv())
 REGEX_TOKEN = re.compile(r"y\w{1,4}_\w{1,1000}")
-db = DB("123.db")
+db = DB(os.getenv("DB_PATH"))
 TOKEN = os.environ.get("BOT_TOKEN")
 
 
