@@ -24,4 +24,4 @@ $ python3 main.py
 GNU LESSER GENERAL PUBLIC LICENSE
 
 
-Файл лицензии расположен здесь: [LICENSE](https://sdf/)
+Файл лицензии расположен здесь: [LICENSE](https://github.com/Aqendo/yandex-music-telegram-bot/blob/main/LICENSE)
