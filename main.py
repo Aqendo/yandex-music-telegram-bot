@@ -1,0 +1,215 @@
+__author__ = "Aqendo"
+__credits__ = ["Aqendo", "MarshalX"]
+__license__ = "LGPL"
+__version__ = "1.0.0"
+__maintainer__ = "Aqendo"
+__email__ = "a@aqendo.eu.org"
+__status__ = "Production"
+
+import asyncio
+import logging
+import os
+import re
+from functools import partial, wraps
+from uuid import uuid4
+
+import aiofiles
+import aiogram.types as aiotypes
+import aiohttp
+import eyed3
+import yandex_music
+from aiogram import Bot, Dispatcher, Router, types
+from aiogram.filters import Command
+from aiogram.types import Message
+from aiogram.types.inline_query_result_cached_audio import \
+    InlineQueryResultCachedAudio
+from aiogram.types.input_text_message_content import InputTextMessageContent
+from dotenv import find_dotenv, load_dotenv
+from eyed3.id3.frames import ImageFrame
+from yandex_music import ClientAsync
+
+from database import DB
+
+load_dotenv(find_dotenv())
+REGEX_TOKEN = re.compile(r"y\w{1,4}_\w{1,1000}")
+db = DB("123.db")
+TOKEN = os.environ.get("BOT_TOKEN")
+
+
+def wrap(func):
+    @wraps(func)
+    async def run(*args, loop=None, executor=None, **kwargs):
+        if loop is None:
+            loop = asyncio.get_event_loop()
+        pfunc = partial(func, *args, **kwargs)
+        return await loop.run_in_executor(executor, pfunc)
+
+    return run
+
+
+bot = Bot(TOKEN, parse_mode="HTML")
+router = Router()
+
+
+@router.message(Command(commands=["start"]))
+async def command_start_handler(message: Message) -> None:
+    await message.answer(
+        """Используй /settoken YOURTOKEN для того чтобы применить токен
+Инструкция:
+
+(Опционально) Открываем DevTools в браузере и на вкладке Network включаем троттлинг.
+Переходим по ссылке https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d
+Авторизуемся при необходимости и предоставляем доступ
+Браузер перенаправит на адрес вида https://music.yandex.ru/#access_token=AQAAAAAYc***&token_type=bearer&expires_in=31535645. Очень быстро произойдет редирект на другую страницу, поэтому нужно успеть скопировать ссылку.
+Ваш токен, то что находится после access_token."""  # noqa: E501
+    )
+
+
+@router.message(Command(commands=["settoken"]))
+async def set_token_handler(message: Message) -> None:
+    token = message.text.strip("/settoken ")
+    if re.match(REGEX_TOKEN, token):
+        await db.set_token(message.from_user.id, token)
+        await message.answer(
+            "Успешно выставлен этот токен:\n\n" + token + "\nкак твой"
+        )
+    else:
+        await message.answer(
+            "Токен не прошёл проверку на валидность, точно ли он правильный? Если нет,то напиши в комментах в @t4stunnimods"  # noqa: E501
+        )
+
+
+@router.inline_query()
+async def inline_query_handler(inline_query: types.InlineQuery):
+    # Проверяем, есть ли токен пользователя в БД
+    token = await db.get_token(inline_query.from_user.id)
+    if token is None:
+        await inline_query.answer(
+            [],
+            cache_time=0,
+            is_personal=0,
+            switch_pm_text="Вы не авторизованы",
+            switch_pm_parameter="1",
+        )
+
+    # Инициализируем асинхронный клиент (да, для каждого запроса)
+    client = ClientAsync(token)
+    await client.init()
+
+    # Пытаемся получить последний играющий трек
+    queues = await client.queues_list()
+    last_queue = await client.queue(queues[0].id)
+    last_track_id = None
+    try:
+        last_track_id = last_queue.get_current_track()
+    except IndexError:
+        # Библиотека Маршала не поддерживает Мою Волну,
+        # по крайней мере на данный момент.
+        await inline_query.answer(
+            [
+                aiotypes.inline_query_result_article.InlineQueryResultArticle(
+                    id="1",
+                    title="Невозможно получить",
+                    input_message_content=InputTextMessageContent(
+                        message_text='Видимо, вы слушаете сейчас "Мою волну", к сожалению встроенный API Яндекс Музыки не позволяет получить информацию о треке, который сейчас играет. Попробуйте сохранить его в плейлист (или забейте в поиск) и включите его там. Раздел "Мне нравится" тоже подходит.'  # noqa: E501
+                    ),
+                )
+            ]
+        )
+        return
+    last_track = await last_track_id.fetch_track_async()
+
+    # Смотрим, есть ли сохранённый file_id в БД
+    idd = last_track.id
+    id_from_db = await db.get_value(idd)
+    if id_from_db is not None:
+        await inline_query.answer(
+            [InlineQueryResultCachedAudio(id="1", audio_file_id=id_from_db)],
+            cache_time=0,
+            is_personal=True,
+        )
+        return
+
+    # Генерируем путь для скачивания музыки, обязательно рандом
+    name = os.getenv("MUSIC_DOWNLOAD_DIR") + str(uuid4()) + ".mp3"
+    muslist = await last_track.get_download_info_async()
+
+    # Сортируем, нам нужно максимальное качество
+    musll = list(filter(lambda x: x.codec == "mp3", muslist))
+    muslist = max(musll, key=lambda x: int(x.bitrate_in_kbps))
+
+    # А вот это чтобы работал IntelliSense
+    if not isinstance(muslist, yandex_music.download_info.DownloadInfo):
+        return
+
+    # Яндекс Музыка, дай пж прямую ссылку
+    # На самом деле получает ссылку библиотека Маршала
+    link = await muslist.get_direct_link_async()
+
+    # Запрашиваем файл мп3 с сервером Яндекс Музыки
+    async with aiohttp.ClientSession() as session:
+        async with session.get(link) as resp:
+            if resp.status == 200:
+                # А вот и наш файлик музыки
+                file = await resp.read()
+                async with aiofiles.open(name, mode="wb") as f:
+                    await f.write(file)
+
+                    # Получаем обложку к музычке
+                    async with aiohttp.ClientSession() as session1:
+                        async with session1.get(
+                            "https://"
+                            + last_track.cover_uri.replace("%%", "200x200")
+                        ) as resp1:
+                            # Инжектим обложку в мп3 файл
+                            cover = await resp1.read()
+                            eyed = eyed3.load(name)
+                            if eyed.tag is None:
+                                eyed.initTag()
+                            eyed.tag.title = last_track.title
+                            eyed.tag.images.set(
+                                ImageFrame.FRONT_COVER, cover, "image/jpeg"
+                            )
+                            eyed.tag.save()
+
+                            # Логируем его в чат лога
+                            # со всеми изменёнными данными
+                            message = await bot.send_audio(
+                                os.getenv("LOG_CHAT_ID"),
+                                aiotypes.FSInputFile(name, "music.mp3"),
+                                title=last_track.title,
+                                performer=last_track.artists[0].name,
+                                duration=last_track.duration_ms // 1000,
+                                thumb=aiotypes.BufferedInputFile(
+                                    cover, "cover.jpeg"
+                                ),
+                            )
+                            # Мы получили file_id и теперь можем дать
+                            # его пользователю
+                            await inline_query.answer(
+                                [
+                                    InlineQueryResultCachedAudio(
+                                        id="1",
+                                        audio_file_id=message.audio.file_id,
+                                    )
+                                ],
+                                cache_time=0,
+                                is_personal=True,
+                            )
+
+                            # Добавляем в БД file_id данной песенки
+                            await db.set_value(idd, message.audio.file_id)
+
+                # Удаляем скачанный файлик
+                await wrap(os.unlink)(name)
+
+
+async def main() -> None:
+    dp = Dispatcher()
+    dp.include_router(router)
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    asyncio.run(main())
