@@ -111,7 +111,7 @@ class DB:
             where id in ({str(values)[1:-1]}); """
             cursor = await sqlite_connection.cursor()
             file_ids = await (await cursor.execute(select)).fetchall()
-            return file_ids or None
+            return file_ids or []
         except aiosqlite.Error as error:
             print("Ошибка при подключении к sqlite", error)
         finally:
