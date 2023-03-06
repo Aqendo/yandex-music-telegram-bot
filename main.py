@@ -4,7 +4,7 @@ __license__ = "LGPL"
 __version__ = "1.0.0"
 __maintainer__ = "Aqendo"
 __email__ = "a@aqendo.eu.org"
-__status__ = "Testing"
+__status__ = "Production"
 
 import asyncio
 import logging
