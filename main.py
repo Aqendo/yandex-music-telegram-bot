@@ -13,13 +13,24 @@ import re
 from functools import partial, wraps
 from uuid import uuid4
 
-import aiogram.types as aiotypes
 import aiohttp
 import eyed3
 import yandex_music
 from aiogram import Bot, Dispatcher, Router, types
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import (
+    Message,
+    InlineQueryResultCachedAudio,
+    InlineQueryResultAudio,
+    InlineQueryResultArticle,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InlineQuery,
+    ChosenInlineResult,
+    InputMediaAudio,
+    FSInputFile,
+    BufferedInputFile,
+)
 from aiogram.types.input_text_message_content import InputTextMessageContent
 from dotenv import find_dotenv, load_dotenv
 from eyed3.id3.frames import ImageFrame
@@ -91,7 +102,7 @@ async def now_playing(
         # по крайней мере на данный момент.
         await inline_query.answer(
             [
-                aiotypes.inline_query_result_article.InlineQueryResultArticle(
+                InlineQueryResultArticle(
                     id="done",
                     title="Невозможно получить",
                     input_message_content=InputTextMessageContent(
@@ -108,7 +119,7 @@ async def now_playing(
     if id_from_db is not None:
         await inline_query.answer(
             [
-                aiotypes.inline_query_result_cached_audio.InlineQueryResultCachedAudio(
+                InlineQueryResultCachedAudio(
                     id="done", type="audio", audio_file_id=id_from_db
                 )
             ],
@@ -118,17 +129,17 @@ async def now_playing(
         return
     await inline_query.answer(
         [
-            aiotypes.inline_query_result_audio.InlineQueryResultAudio(
+            InlineQueryResultAudio(
                 id=track.id,
                 audio_duration=track.duration_ms // 1000,
                 title=track.title,
                 performer=track.artists[0].name,
                 audio_url="https://a.pomf.cat/tncpzw.mp3?a=" + str(uuid4()),
-                reply_markup=aiotypes.inline_keyboard_markup.InlineKeyboardMarkup(
+                reply_markup=InlineKeyboardMarkup(
                     row_width=1,
                     inline_keyboard=[
                         [
-                            aiotypes.inline_keyboard_button.InlineKeyboardButton(
+                            InlineKeyboardButton(
                                 text="Идёт загрузка...",
                                 callback_data="downloading",
                             )
@@ -143,20 +154,35 @@ async def now_playing(
 
 
 async def search_and_play(
-    inline_query: types.InlineQuery, client: yandex_music.ClientAsync
+    inline_query: InlineQuery, client: yandex_music.ClientAsync
 ):
     search_results: yandex_music.Search = await client.search(
         inline_query.query, True, "track", 0
     )
     results_inline = []
-    cached = await db.check([x.id for x in search_results.tracks.results])
+    try:
+        cached = await db.check([x.id for x in search_results.tracks.results])
+    except AttributeError:
+        await inline_query.answer(
+            [
+                InlineQueryResultArticle(
+                    type="article",
+                    id="done",
+                    title="Ничего не нашлось",
+                    input_message_content=InputTextMessageContent(
+                        message_text="Ничего не нашлось"
+                    ),
+                )
+            ]
+        )
+        return
     cached = {x[0]: x[1] for x in cached}
     for track in search_results.tracks.results:
         title = track.title
         artist = track.artists[0].name
         if str(track.id) in cached:
             results_inline.append(
-                aiotypes.inline_query_result_cached_audio.InlineQueryResultCachedAudio(
+                InlineQueryResultCachedAudio(
                     id="done" + str(uuid4())[:7],
                     type="audio",
                     audio_file_id=cached[str(track.id)],
@@ -164,18 +190,17 @@ async def search_and_play(
             )
         else:
             results_inline.append(
-                aiotypes.inline_query_result_audio.InlineQueryResultAudio(
+                InlineQueryResultAudio(
                     id=track.id,
                     audio_duration=track.duration_ms // 1000,
                     title=title,
                     performer=artist,
-                    audio_url="https://a.pomf.cat/tncpzw.mp3?a="
-                    + str(uuid4()),
-                    reply_markup=aiotypes.inline_keyboard_markup.InlineKeyboardMarkup(
+                    audio_url=os.getenv("BLANK_MP3_URL") + str(uuid4()),
+                    reply_markup=InlineKeyboardMarkup(
                         row_width=1,
                         inline_keyboard=[
                             [
-                                aiotypes.inline_keyboard_button.InlineKeyboardButton(
+                                InlineKeyboardButton(
                                     text="Идёт загрузка...",
                                     callback_data="downloading",
                                 )
@@ -188,7 +213,7 @@ async def search_and_play(
 
 
 @router.inline_query()
-async def inline_query_handler(inline_query: types.InlineQuery):
+async def inline_query_handler(inline_query: InlineQuery):
     # Проверяем, есть ли токен пользователя в БД
     token = await db.get_token(inline_query.from_user.id)
     if token is None:
@@ -200,12 +225,12 @@ async def inline_query_handler(inline_query: types.InlineQuery):
             switch_pm_parameter="done",
         )
         return
-    isCreated = False
+    is_created = False
     if inline_query.from_user.id not in client_cache:
         client = ClientAsync(token)
         await client.init()
         client_cache[inline_query.from_user.id] = client
-        isCreated = True
+        is_created = True
     else:
         client = client_cache[inline_query.from_user.id]
 
@@ -213,24 +238,25 @@ async def inline_query_handler(inline_query: types.InlineQuery):
         await now_playing(inline_query, client)
     else:
         await search_and_play(inline_query, client)
-    if isCreated:
+    if is_created:
         await asyncio.sleep(60 * 10)
         del client_cache[inline_query.from_user.id]
 
 
 @router.chosen_inline_result()
 async def chosen_result_handler(
-    inline_query: types.chosen_inline_result.ChosenInlineResult,
+    inline_query: ChosenInlineResult,
 ):
     if inline_query.result_id.startswith("done"):
         return
     result_id = inline_query.result_id
     token = await db.get_token(inline_query.from_user.id)
+    is_created = False
     if inline_query.from_user.id not in client_cache:
         client = ClientAsync(token)
         await client.init()
         client_cache[inline_query.from_user.id] = client
-        isCreated = True
+        is_created = True
     else:
         client = client_cache[inline_query.from_user.id]
     last_track = (await client.tracks(result_id))[0]
@@ -239,7 +265,7 @@ async def chosen_result_handler(
     if id_from_db is not None:
         await bot.edit_message_media(
             inline_message_id=inline_query.inline_message_id,
-            media=aiotypes.input_media_audio.InputMediaAudio(
+            media=InputMediaAudio(
                 type="audio",
                 media=id_from_db,
             ),
@@ -291,22 +317,24 @@ async def chosen_result_handler(
                         # со всеми изменёнными данными
                         message = await bot.send_audio(
                             os.getenv("LOG_CHAT_ID"),
-                            aiotypes.FSInputFile(
+                            FSInputFile(
                                 name,
-                                f"{last_track.artists[0].name} - {last_track.title}.mp3",
+                                "%s- %s.mp3"
+                                % (
+                                    last_track.artists[0].name,
+                                    last_track.title,
+                                ),
                             ),
                             title=last_track.title,
                             performer=last_track.artists[0].name,
                             duration=last_track.duration_ms // 1000,
-                            thumb=aiotypes.BufferedInputFile(
-                                cover, "cover.jpeg"
-                            ),
+                            thumb=BufferedInputFile(cover, "cover.jpeg"),
                         )
                         # Мы получили file_id и теперь можем дать
                         # его пользователю
                         await bot.edit_message_media(
                             inline_message_id=inline_query.inline_message_id,
-                            media=aiotypes.input_media_audio.InputMediaAudio(
+                            media=InputMediaAudio(
                                 type="audio",
                                 media=message.audio.file_id,
                             ),
@@ -316,12 +344,15 @@ async def chosen_result_handler(
 
                 # Удаляем скачанный файлик
                 await wrap(os.unlink)(name)
+    if is_created:
+        await asyncio.sleep(60 * 10)
+        del client_cache[inline_query.from_user.id]
 
 
 async def main() -> None:
-    dp = Dispatcher()
-    dp.include_router(router)
-    await dp.start_polling(bot)
+    dispatcher = Dispatcher()
+    dispatcher.include_router(router)
+    await dispatcher.start_polling(bot)
 
 
 if __name__ == "__main__":
