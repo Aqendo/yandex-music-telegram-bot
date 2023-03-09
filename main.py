@@ -62,6 +62,7 @@ router = Router()
 ALLOW_UNREGISTERED_SEARCH = os.getenv("ALLOW_UNREGISTERED_SEARCH", False)
 DEFAULT_TOKEN = os.getenv("DEFAULT_TOKEN", "")
 
+
 @router.message(Command(commands=["start"]))
 async def command_start_handler(message: Message) -> None:
     await message.answer(
@@ -252,7 +253,7 @@ async def inline_query_handler(inline_query: InlineQuery):
                     switch_pm_parameter="done",
                 )
                 return
-        
+
         is_created = False
         if inline_query.from_user.id not in client_cache:
             client = ClientAsync(token)
@@ -262,13 +263,7 @@ async def inline_query_handler(inline_query: InlineQuery):
         else:
             client = client_cache[inline_query.from_user.id]
         await search_and_play(inline_query, client)
-    
-    
-    
-    
-    
 
-    
     if is_created:
         await asyncio.sleep(60 * 10)
         del client_cache[inline_query.from_user.id]
