@@ -59,6 +59,8 @@ def wrap(func):
 bot = Bot(TOKEN, parse_mode="HTML")
 router = Router()
 
+ALLOW_UNREGISTERED_SEARCH = os.getenv("ALLOW_UNREGISTERED_SEARCH", False)
+DEFAULT_TOKEN = os.getenv("DEFAULT_TOKEN", "")
 
 @router.message(Command(commands=["start"]))
 async def command_start_handler(message: Message) -> None:
@@ -216,28 +218,57 @@ async def search_and_play(
 async def inline_query_handler(inline_query: InlineQuery):
     # Проверяем, есть ли токен пользователя в БД
     token = await db.get_token(inline_query.from_user.id)
-    if token is None:
-        await inline_query.answer(
-            [],
-            cache_time=0,
-            is_personal=0,
-            switch_pm_text="Вы не авторизованы",
-            switch_pm_parameter="done",
-        )
-        return
-    is_created = False
-    if inline_query.from_user.id not in client_cache:
-        client = ClientAsync(token)
-        await client.init()
-        client_cache[inline_query.from_user.id] = client
-        is_created = True
-    else:
-        client = client_cache[inline_query.from_user.id]
-
     if inline_query.query == "":
+        # Значит нужно показать юзеру текущий трек
+        if token is None:
+            await inline_query.answer(
+                [],
+                cache_time=0,
+                is_personal=0,
+                switch_pm_text="Вы не авторизованы",
+                switch_pm_parameter="done",
+            )
+            return
+        is_created = False
+        if inline_query.from_user.id not in client_cache:
+            client = ClientAsync(token)
+            await client.init()
+            client_cache[inline_query.from_user.id] = client
+            is_created = True
+        else:
+            client = client_cache[inline_query.from_user.id]
         await now_playing(inline_query, client)
     else:
+        if token is None:
+            # Владелец бота может разрешить неавторизованный поиск
+            if ALLOW_UNREGISTERED_SEARCH:
+                token = DEFAULT_TOKEN
+            else:
+                await inline_query.answer(
+                    [],
+                    cache_time=0,
+                    is_personal=0,
+                    switch_pm_text="Вы не авторизованы",
+                    switch_pm_parameter="done",
+                )
+                return
+        
+        is_created = False
+        if inline_query.from_user.id not in client_cache:
+            client = ClientAsync(token)
+            await client.init()
+            client_cache[inline_query.from_user.id] = client
+            is_created = True
+        else:
+            client = client_cache[inline_query.from_user.id]
         await search_and_play(inline_query, client)
+    
+    
+    
+    
+    
+
+    
     if is_created:
         await asyncio.sleep(60 * 10)
         del client_cache[inline_query.from_user.id]
