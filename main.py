@@ -59,7 +59,7 @@ def wrap(func):
 bot = Bot(TOKEN, parse_mode="HTML")
 router = Router()
 
-ALLOW_UNREGISTERED_SEARCH = os.getenv("ALLOW_UNREGISTERED_SEARCH", False)
+ALLOW_UNREGISTERED_SEARCH = True if os.getenv("ALLOW_UNREGISTERED_SEARCH", False) == "True" else False
 DEFAULT_TOKEN = os.getenv("DEFAULT_TOKEN", "")
 
 
@@ -137,7 +137,7 @@ async def now_playing(
                 audio_duration=track.duration_ms // 1000,
                 title=track.title,
                 performer=track.artists[0].name,
-                audio_url="https://a.pomf.cat/tncpzw.mp3?a=" + str(uuid4()),
+                audio_url=os.getenv("BLANK_MP3_URL") + str(uuid4()),
                 reply_markup=InlineKeyboardMarkup(
                     row_width=1,
                     inline_keyboard=[
