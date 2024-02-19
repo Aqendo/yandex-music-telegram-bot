@@ -300,7 +300,17 @@ async def chosen_result_handler(
 
     # Генерируем путь для скачивания музыки, обязательно рандом
     name = os.getenv("MUSIC_DOWNLOAD_DIR") + str(uuid4()) + ".mp3"
-    muslist = await last_track.get_download_info_async()
+    try:
+        muslist = await last_track.get_download_info_async()
+    except yandex_music.exceptions.TimedOutError:
+        try:
+            muslist = await last_track.get_download_info_async()
+        except yandex_music.exceptions.TimedOutError:
+            await bot.edit_message_media(
+                inline_message_id=inline_query.inline_message_id,
+                caption=traceback.format_exc().rsplit("\n", maxsplit=2)[1]
+            )
+            return
     # Сортируем, нам нужно максимальное качество
     musll = list(filter(lambda x: x.codec == "mp3", muslist))
     muslist = max(musll, key=lambda x: int(x.bitrate_in_kbps))

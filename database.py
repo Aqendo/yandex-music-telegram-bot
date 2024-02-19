@@ -105,6 +105,7 @@ class DB:
                 await sqlite_connection.close()
 
     async def check(self, values: list):
+        sqlite_connection = None
         try:
             sqlite_connection = await aiosqlite.connect(self.name)
             select = f"""SELECT * FROM musics
