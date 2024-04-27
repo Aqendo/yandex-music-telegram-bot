@@ -133,7 +133,7 @@ async def now_playing(
     await inline_query.answer(
         [
             InlineQueryResultAudio(
-                id=track.id,
+                id=str(track.id),
                 audio_duration=track.duration_ms // 1000,
                 title=track.title,
                 performer=track.artists[0].name,
@@ -194,7 +194,7 @@ async def search_and_play(
         else:
             results_inline.append(
                 InlineQueryResultAudio(
-                    id=track.id,
+                    id=str(track.id),
                     audio_duration=track.duration_ms // 1000,
                     title=title,
                     performer=artist,
@@ -364,7 +364,7 @@ async def chosen_result_handler(
                             title=last_track.title,
                             performer=last_track.artists[0].name,
                             duration=last_track.duration_ms // 1000,
-                            thumb=BufferedInputFile(cover, "cover.jpeg"),
+                            thumbnail=BufferedInputFile(cover, "cover.jpeg"),
                         )
                         # Мы получили file_id и теперь можем дать
                         # его пользователю
